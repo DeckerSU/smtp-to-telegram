@@ -1,0 +1,183 @@
+name: Build and publish release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Build Release
+    runs-on: ${{ matrix.os }}
+    if: github.repository_owner == 'DeckerSU'
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: smtp-to-telegram
+          - os: windows-latest
+            artifact_name: smtp-to-telegram.exe
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set environment variables
+      shell: bash
+      run: |
+        # Extract version from Cargo.toml and validate
+        RELEASE=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/' | tr -d '[:space:]')
+        if [ -z "$RELEASE" ]; then
+          echo "Error: Failed to extract version from Cargo.toml"
+          exit 1
+        fi
+        echo "RELEASE=$RELEASE" >> $GITHUB_ENV
+        echo "Extracted version: $RELEASE"
+
+    - name: Install rustup
+      shell: bash
+      run: |
+        if ! command -v rustup &> /dev/null; then
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+        fi
+        # Add cargo to PATH (works on both Linux and Windows)
+        if [ -d "$HOME/.cargo/bin" ]; then
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        fi
+        # For Windows, also check USERPROFILE
+        if [ -n "$USERPROFILE" ] && [ -d "$USERPROFILE/.cargo/bin" ]; then
+          echo "$USERPROFILE/.cargo/bin" >> $GITHUB_PATH
+        fi
+
+    - name: Install toolchain
+      shell: bash
+      run: |
+        # Ensure cargo is in PATH
+        export PATH="$HOME/.cargo/bin:${USERPROFILE:-}/.cargo/bin:$PATH"
+        rustup toolchain install stable --no-self-update --profile=minimal
+        rustup default stable
+        rustup component add rustfmt clippy
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Build release binary
+      shell: bash
+      run: |
+        # Ensure cargo is in PATH
+        export PATH="$HOME/.cargo/bin:${USERPROFILE:-}/.cargo/bin:$PATH"
+        cargo build --release
+
+    - name: Prepare artifact (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      shell: bash
+      run: |
+        ARCHIVE_NAME="smtp-to-telegram-${{ env.RELEASE }}-linux.tar.gz"
+        tar czf "${ARCHIVE_NAME}" -C target/release ${{ matrix.artifact_name }}
+        echo "ARCHIVE_NAME=${ARCHIVE_NAME}" >> $GITHUB_ENV
+
+    - name: Prepare artifact (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        $ARCHIVE_NAME = "smtp-to-telegram-${{ env.RELEASE }}-windows.zip"
+        Compress-Archive -Path "target\release\${{ matrix.artifact_name }}" -DestinationPath $ARCHIVE_NAME -Force
+        echo "ARCHIVE_NAME=$ARCHIVE_NAME" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: Upload artifact (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: smtp-to-telegram-${{ env.RELEASE }}-linux.tar.gz
+        path: smtp-to-telegram-${{ env.RELEASE }}-linux.tar.gz
+        retention-days: 30
+
+    - name: Upload artifact (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: smtp-to-telegram-${{ env.RELEASE }}-windows.zip
+        path: smtp-to-telegram-${{ env.RELEASE }}-windows.zip
+        retention-days: 30
+
+  create-release:
+    name: Create Release
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'DeckerSU'
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set environment variables
+      run: |
+        # Extract version from Cargo.toml and validate
+        RELEASE=$(grep '^version = ' Cargo.toml | sed 's/version = "\(.*\)"/\1/' | tr -d '[:space:]')
+        if [ -z "$RELEASE" ]; then
+          echo "Error: Failed to extract version from Cargo.toml"
+          exit 1
+        fi
+        echo "RELEASE=$RELEASE" >> $GITHUB_ENV
+        echo "RELEASE_TAG=v${RELEASE}" >> $GITHUB_ENV
+        echo "Extracted version: $RELEASE"
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    # - name: Create Git tag
+    #   run: |
+    #     git config user.name "github-actions[bot]"
+    #     git config user.email "github-actions[bot]@users.noreply.github.com"
+    #     git tag -a "${{ env.RELEASE_TAG }}" -m "Release ${{ env.RELEASE }}"
+    #     git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+    #     git push origin "${{ env.RELEASE_TAG }}"
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@latest
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ env.RELEASE_TAG }}
+        release_name: Release ${{ env.RELEASE }}
+        body: |
+          Release ${{ env.RELEASE }}
+          
+          ## Artifacts
+          - Linux: `smtp-to-telegram-${{ env.RELEASE }}-linux.tar.gz`
+          - Windows: `smtp-to-telegram-${{ env.RELEASE }}-windows.zip`
+        draft: false
+        prerelease: false
+
+    - name: Upload Linux artifact
+      uses: actions/upload-release-asset@latest
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/smtp-to-telegram-${{ env.RELEASE }}-linux.tar.gz
+        asset_name: smtp-to-telegram-${{ env.RELEASE }}-linux.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload Windows artifact
+      uses: actions/upload-release-asset@latest
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: artifacts/smtp-to-telegram-${{ env.RELEASE }}-windows.zip
+        asset_name: smtp-to-telegram-${{ env.RELEASE }}-windows.zip
+        asset_content_type: application/zip
+
