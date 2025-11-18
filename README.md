@@ -2,6 +2,10 @@
 
 Rust project for forwarding messages received via SMTP to a Telegram bot.
 
+## System Architecture
+
+![System Architecture Diagram](images/system-architecture-diagram.png)
+
 ## Description
 
 This project implements an SMTP server that receives incoming email messages and automatically forwards their text to a specified Telegram chat via Bot API.
