@@ -1,0 +1,85 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug SMTP to Telegram",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=smtp-to-telegram",
+                    "--package=smtp-to-telegram"
+                ],
+                "filter": {
+                    "name": "smtp-to-telegram",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--token",
+                "${input:telegramToken}",
+                "--chat-id",
+                "${input:telegramChatId}",
+                "--port",
+                "2525"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "sourceLanguages": ["rust"]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug SMTP to Telegram (Custom Args)",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=smtp-to-telegram",
+                    "--package=smtp-to-telegram"
+                ],
+                "filter": {
+                    "name": "smtp-to-telegram",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "sourceLanguages": ["rust"]
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Tests",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-fail-fast"
+                ],
+                "filter": {
+                    "name": "smtp-to-telegram",
+                    "kind": "lib"
+                }
+            },
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "sourceLanguages": ["rust"]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "telegramToken",
+            "type": "promptString",
+            "description": "Enter Telegram Bot Token",
+            "default": ""
+        },
+        {
+            "id": "telegramChatId",
+            "type": "promptString",
+            "description": "Enter Telegram Chat ID",
+            "default": ""
+        }
+    ]
+}
+

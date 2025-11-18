@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  smtp-to-telegram:
+    build: .
+    container_name: smtp-to-telegram
+    restart: unless-stopped
+    ports:
+      - "${SMTP_PORT:-2525}:${SMTP_PORT:-2525}"
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - SMTP_PORT=${SMTP_PORT:-2525}
+      - SMTP_BIND=${SMTP_BIND:-0.0.0.0}
+
