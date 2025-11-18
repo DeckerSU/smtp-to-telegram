@@ -21,14 +21,20 @@ cargo build --release
 ## Usage
 
 ```bash
-./target/release/smtp-to-telegram --token YOUR_BOT_TOKEN --chat-id YOUR_CHAT_ID [--port PORT]
+./target/release/smtp-to-telegram --token YOUR_BOT_TOKEN --chat-id YOUR_CHAT_ID [--port PORT] [--bind ADDRESS]
 ```
 
 ### Parameters
 
 - `--token` / `-t`: Telegram Bot Token (required)
+  - Environment variable: `TELEGRAM_TOKEN`
 - `--chat-id` / `-c`: Telegram Chat ID (required)
+  - Environment variable: `TELEGRAM_CHAT_ID`
 - `--port` / `-p`: SMTP server port (optional, default: 2525)
+  - Environment variable: `SMTP_PORT`
+- `--bind` / `-b`: Bind address for SMTP server (optional, default: 0.0.0.0)
+  - Environment variable: `SMTP_BIND`
+- `--help` / `-h`: Show help message and exit
 
 The server will listen on the specified port (or 2525 by default) for incoming SMTP connections. Make sure the port is not already in use and that your firewall allows connections to this port.
 
@@ -38,7 +44,21 @@ The server will listen on the specified port (or 2525 by default) for incoming S
 ./target/release/smtp-to-telegram \
   --token "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" \
   --chat-id "123456789" \
-  --port 2525
+  --port 2525 \
+  --bind 0.0.0.0
+```
+
+### Using Environment Variables
+
+All parameters can also be set using environment variables:
+
+```bash
+export TELEGRAM_TOKEN="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+export TELEGRAM_CHAT_ID="123456789"
+export SMTP_PORT=2525
+export SMTP_BIND=0.0.0.0
+
+./target/release/smtp-to-telegram
 ```
 
 ## How to Get Chat ID
