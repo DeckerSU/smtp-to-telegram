@@ -109,6 +109,38 @@ swaks --to user@example.com --from sender@example.com --server localhost:2525 --
 Hello, this is a test message!"
 ```
 
+#### Message with AUTH PLAIN
+
+```bash
+swaks \
+  --to user@example.com \
+  --from sender@example.com \
+  --server localhost:2525 \
+  --auth PLAIN \
+  --auth-user sender@example.com \
+  --auth-password x \
+  --data "Subject: Test Message
+
+Hello, this is a test message!"
+```
+
+#### Message with AUTH LOGIN
+
+The same as above, but using `--auth LOGIN` instead of `--auth PLAIN`:
+
+```bash
+swaks \
+  --to user@example.com \
+  --from sender@example.com \
+  --server localhost:2525 \
+  --auth LOGIN \
+  --auth-user sender@example.com \
+  --auth-password x \
+  --data "Subject: Test Message
+
+Hello, this is a test message!"
+```
+
 #### HTML message
 
 ```bash
@@ -226,7 +258,7 @@ Or pull a specific version:
 docker pull ghcr.io/deckersu/smtp-to-telegram:0.1.0
 ```
 
-**Note:** The image is automatically built and published to GitHub Container Registry on every push to the `main` branch.
+**Note:** The image can be built and published to GitHub Container Registry manually by the author using GitHub Actions workflows.
 
 ### Run with Docker
 
