@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose};
 use clap::Parser;
 use mail_parser::{MessageParser, MimeHeaders};
 use smtp_proto::Request;
@@ -135,11 +136,20 @@ struct Args {
     bind: String,
 }
 
+#[derive(Clone, Copy)]
+enum AuthState {
+    None,
+    LoginWaitingUsername,
+    LoginWaitingPassword,
+    PlainWaitingData,
+}
+
 struct SmtpSession {
     stream: TcpStream,
     telegram_token: String,
     telegram_chat_id: String,
     buffer: Vec<u8>,
+    auth_state: AuthState,
 }
 
 impl SmtpSession {
@@ -149,6 +159,7 @@ impl SmtpSession {
             telegram_token,
             telegram_chat_id,
             buffer: Vec::new(),
+            auth_state: AuthState::None,
         }
     }
 
@@ -443,6 +454,90 @@ impl SmtpSession {
         let mut in_data = false;
 
         loop {
+            // Handle authentication state
+            match self.auth_state {
+                AuthState::LoginWaitingUsername | AuthState::LoginWaitingPassword | AuthState::PlainWaitingData => {
+                    let line_bytes = self.read_line_bytes().await?;
+                    let line = String::from_utf8_lossy(&line_bytes[..line_bytes.len().saturating_sub(2)]);
+                    let line = line.trim();
+                    
+                    match self.auth_state {
+                        AuthState::LoginWaitingUsername => {
+                            // Decode base64 username
+                            let username = if line.is_empty() {
+                                String::new()
+                            } else {
+                                match general_purpose::STANDARD.decode(line) {
+                                    Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                                    Err(_) => line.to_string(),
+                                }
+                            };
+                            println!("AUTH LOGIN username: {}", username);
+                            self.send_response(Response::new(334, 0, 0, 0, "UGFzc3dvcmQ6".to_string())) // "Password:" in base64
+                                .await?;
+                            self.auth_state = AuthState::LoginWaitingPassword;
+                            continue;
+                        }
+                        AuthState::LoginWaitingPassword => {
+                            // Decode base64 password
+                            let password = if line.is_empty() {
+                                String::new()
+                            } else {
+                                match general_purpose::STANDARD.decode(line) {
+                                    Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                                    Err(_) => line.to_string(),
+                                }
+                            };
+                            println!("AUTH LOGIN password: {}", password);
+                            self.send_response(Response::new(235, 0, 0, 0, "Authentication successful".to_string()))
+                                .await?;
+                            self.auth_state = AuthState::None;
+                            continue;
+                        }
+                        AuthState::PlainWaitingData => {
+                            // PLAIN format: \0username\0password (base64 encoded)
+                            let decoded = if line.is_empty() {
+                                Vec::new()
+                            } else {
+                                match general_purpose::STANDARD.decode(line) {
+                                    Ok(bytes) => bytes,
+                                    Err(_) => {
+                                        self.send_response(Response::new(535, 0, 0, 0, "Authentication failed".to_string()))
+                                            .await?;
+                                        self.auth_state = AuthState::None;
+                                        continue;
+                                    }
+                                }
+                            };
+                            
+                            // Parse PLAIN format: \0username\0password
+                            let parts: Vec<&[u8]> = decoded.split(|&b| b == 0).collect();
+                            if parts.len() >= 3 {
+                                let username = String::from_utf8_lossy(parts[1]).to_string();
+                                let password = String::from_utf8_lossy(parts[2]).to_string();
+                                println!("AUTH PLAIN username: {}", username);
+                                println!("AUTH PLAIN password: {}", password);
+                            } else if parts.len() == 2 {
+                                // Sometimes format is username\0password
+                                let username = String::from_utf8_lossy(parts[0]).to_string();
+                                let password = String::from_utf8_lossy(parts[1]).to_string();
+                                println!("AUTH PLAIN username: {}", username);
+                                println!("AUTH PLAIN password: {}", password);
+                            } else {
+                                println!("AUTH PLAIN raw data: {}", line);
+                            }
+                            
+                            self.send_response(Response::new(235, 0, 0, 0, "Authentication successful".to_string()))
+                                .await?;
+                            self.auth_state = AuthState::None;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+            
             if in_data {
                 // In DATA mode, read bytes directly to preserve UTF-8 encoding
                 let line_bytes = self.read_line_bytes().await?;
@@ -537,12 +632,100 @@ impl SmtpSession {
             // Parse SMTP command
             // Request::parse requires a complete line with \r\n, so we read bytes directly
             let line_bytes = self.read_line_bytes().await?;
+            let line_str = String::from_utf8_lossy(&line_bytes[..line_bytes.len().saturating_sub(2)]);
+            let line_upper = line_str.trim().to_uppercase();
+            
+            // Check if it's an AUTH command before parsing
+            if line_upper.starts_with("AUTH ") {
+                let parts: Vec<&str> = line_str.trim().split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let mechanism = parts[1].to_uppercase();
+                    let initial_response = if parts.len() >= 3 {
+                        Some(parts[2..].join(" "))
+                    } else {
+                        None
+                    };
+                    
+                    match mechanism.as_str() {
+                        "LOGIN" => {
+                            if let Some(initial) = initial_response {
+                                // Username provided in initial response
+                                let username = match general_purpose::STANDARD.decode(&initial) {
+                                    Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                                    Err(_) => initial.clone(),
+                                };
+                                println!("AUTH LOGIN username: {}", username);
+                                self.send_response(Response::new(334, 0, 0, 0, "UGFzc3dvcmQ6".to_string())) // "Password:" in base64
+                                    .await?;
+                                self.auth_state = AuthState::LoginWaitingPassword;
+                            } else {
+                                // Request username
+                                self.send_response(Response::new(334, 0, 0, 0, "VXNlcm5hbWU6".to_string())) // "Username:" in base64
+                                    .await?;
+                                self.auth_state = AuthState::LoginWaitingUsername;
+                            }
+                            continue;
+                        }
+                        "PLAIN" => {
+                            if let Some(initial) = initial_response {
+                                // PLAIN data provided in initial response
+                                let decoded = match general_purpose::STANDARD.decode(&initial) {
+                                    Ok(bytes) => bytes,
+                                    Err(_) => {
+                                        self.send_response(Response::new(535, 0, 0, 0, "Authentication failed".to_string()))
+                                            .await?;
+                                        continue;
+                                    }
+                                };
+                                
+                                // Parse PLAIN format: \0username\0password
+                                let parts: Vec<&[u8]> = decoded.split(|&b| b == 0).collect();
+                                if parts.len() >= 3 {
+                                    let username = String::from_utf8_lossy(parts[1]).to_string();
+                                    let password = String::from_utf8_lossy(parts[2]).to_string();
+                                    println!("AUTH PLAIN username: {}", username);
+                                    println!("AUTH PLAIN password: {}", password);
+                                } else if parts.len() == 2 {
+                                    let username = String::from_utf8_lossy(parts[0]).to_string();
+                                    let password = String::from_utf8_lossy(parts[1]).to_string();
+                                    println!("AUTH PLAIN username: {}", username);
+                                    println!("AUTH PLAIN password: {}", password);
+                                } else {
+                                    println!("AUTH PLAIN raw data: {}", initial);
+                                }
+                                
+                                self.send_response(Response::new(235, 0, 0, 0, "Authentication successful".to_string()))
+                                    .await?;
+                                self.auth_state = AuthState::None;
+                            } else {
+                                // Request PLAIN data
+                                self.send_response(Response::new(334, 0, 0, 0, "".to_string()))
+                                    .await?;
+                                self.auth_state = AuthState::PlainWaitingData;
+                            }
+                            continue;
+                        }
+                        _ => {
+                            self.send_response(Response::new(
+                                504,
+                                0,
+                                0,
+                                0,
+                                format!("Unsupported authentication method: {}", mechanism),
+                            ))
+                            .await?;
+                            continue;
+                        }
+                    }
+                }
+            }
+            
             let mut iter = line_bytes.iter();
             let request = Request::parse(&mut iter)
                 .map_err(|e| anyhow::anyhow!("Failed to parse SMTP request: {:?}", e))?;
 
             match request {
-                Request::Helo { host } | Request::Ehlo { host } => {
+                Request::Helo { host } => {
                     self.send_response(Response::new(
                         250,
                         0,
@@ -551,6 +734,23 @@ impl SmtpSession {
                         format!("Hello {}", host.into_owned()),
                     ))
                     .await?;
+                }
+                Request::Ehlo { host } => {
+                    // EHLO should advertise AUTH support
+                    // Send multi-line response in correct SMTP format
+                    let host_str = host.into_owned();
+                    // Format: continuation lines with dash (250-), last line without dash (250 )
+                    let response = format!("250-Hello {}\r\n250 AUTH LOGIN PLAIN\r\n", host_str);
+                    println!("Sending EHLO response: {:?}", response);
+                    self.stream
+                        .write_all(response.as_bytes())
+                        .await
+                        .context("Failed to write EHLO response")?;
+                    self.stream
+                        .flush()
+                        .await
+                        .context("Failed to flush EHLO response")?;
+                    println!("EHLO response sent and flushed");
                 }
                 Request::Lhlo { host } => {
                     self.send_response(Response::new(
@@ -646,6 +846,8 @@ impl SmtpSession {
                     .await?;
                 }
                 Request::Auth { .. } => {
+                    // AUTH command is handled above before parsing
+                    // This should not be reached, but handle it anyway
                     self.send_response(Response::new(
                         502,
                         0,
